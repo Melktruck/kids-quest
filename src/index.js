@@ -18,11 +18,72 @@ function App() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [showGrownUp, setShowGrownUp] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const bottomRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Speak Cosmo's reply out loud
+  const speak = (text) => {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.9;
+    utterance.pitch = 1.2;
+    utterance.volume = 1;
+
+    // Try to pick a friendly voice
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v =>
+      v.name.includes('Samantha') ||
+      v.name.includes('Karen') ||
+      v.name.includes('Google UK English Female') ||
+      v.name.includes('Female')
+    );
+    if (preferred) utterance.voice = preferred;
+
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Start listening to the child's voice
+  const startListening = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Voice chat isn't supported on this browser. Try Chrome or Safari!");
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognitionRef.current = recognition;
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      sendMessage(transcript);
+    };
+
+    recognition.start();
+  };
+
+  const stopListening = () => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  };
 
   const sendMessage = async (text) => {
     const userText = text || input.trim();
@@ -48,11 +109,11 @@ function App() {
       const data = await response.json();
       const reply = data.reply || "Houston, we have a problem! Can you try asking me again?";
       setMessages([...newMessages, { role: 'assistant', content: reply }]);
+      speak(reply);
     } catch {
-      setMessages([...newMessages, {
-        role: 'assistant',
-        content: "Uh oh, my radio signal got lost in space! Can you try again? 📡",
-      }]);
+      const errMsg = "Uh oh, my radio signal got lost in space! Can you try again? 📡";
+      setMessages([...newMessages, { role: 'assistant', content: errMsg }]);
+      speak(errMsg);
     }
     setLoading(false);
   };
@@ -72,7 +133,9 @@ function App() {
           <span style={styles.avatar}>🚀</span>
           <div>
             <div style={styles.characterName}>Cosmo</div>
-            <div style={styles.characterTitle}>Space Explorer</div>
+            <div style={styles.characterTitle}>
+              {isSpeaking ? '🔊 Speaking...' : isListening ? '👂 Listening...' : 'Space Explorer'}
+            </div>
           </div>
         </div>
         <button style={styles.grownUpBtn} onClick={() => setShowGrownUp(true)}>
@@ -113,12 +176,28 @@ function App() {
 
       {/* Input area */}
       <div style={styles.inputArea}>
+        {/* Mic button */}
+        <button
+          style={{
+            ...styles.micBtn,
+            background: isListening
+              ? 'linear-gradient(135deg, #ff4444, #cc0000)'
+              : 'linear-gradient(135deg, #43e97b, #38f9d7)',
+            transform: isListening ? 'scale(1.1)' : 'scale(1)',
+          }}
+          onClick={isListening ? stopListening : startListening}
+          disabled={loading}
+          title={isListening ? "Stop listening" : "Tap to speak!"}
+        >
+          {isListening ? '⏹️' : '🎤'}
+        </button>
+
         <input
           style={styles.input}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKey}
-          placeholder="Ask Cosmo anything about space! 🌟"
+          placeholder="Speak or type to Cosmo! 🌟"
           disabled={loading}
         />
         <button
@@ -141,7 +220,8 @@ function App() {
             <div style={styles.modalText}>
               ✅ No personal information is collected<br/>
               ✅ All responses are child-safe<br/>
-              ✅ No accounts or sign-ups required
+              ✅ No accounts or sign-ups required<br/>
+              ✅ Voice feature uses your device's built-in speech tools
             </div>
             <div style={styles.modalText}>
               If you have any concerns about the conversation, you can scroll up to read everything Cosmo has said.
@@ -208,7 +288,13 @@ const styles = {
   inputArea: {
     display: 'flex', gap: '8px', padding: '12px 16px',
     background: 'rgba(255,255,255,0.05)', borderTop: '1px solid rgba(255,255,255,0.1)',
-    flexShrink: 0,
+    flexShrink: 0, alignItems: 'center',
+  },
+  micBtn: {
+    width: '48px', height: '48px', borderRadius: '50%', border: 'none',
+    fontSize: '1.3rem', cursor: 'pointer', flexShrink: 0,
+    transition: 'transform 0.2s, background 0.2s',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   input: {
     flex: 1, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
