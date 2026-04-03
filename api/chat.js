@@ -8,29 +8,16 @@ export default async function handler(req, res) {
   const apiKey = process.env.CLAUDE_API_KEY;
 
   if (!apiKey) {
-    console.error('Missing CLAUDE_API_KEY environment variable');
     return res.status(200).json({ reply: "Cosmo's radio is offline right now. Please try again later!" });
   }
 
-  // Build the messages array, injecting the room image into the first user message if present
   let apiMessages = messages.map((m, index) => {
-    // If this is the first user message and we have a room image, attach it
     if (index === 0 && m.role === 'user' && roomImage) {
       return {
         role: 'user',
         content: [
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: roomImage.mediaType,
-              data: roomImage.data,
-            },
-          },
-          {
-            type: 'text',
-            text: m.content,
-          },
+          { type: 'image', source: { type: 'base64', media_type: roomImage.mediaType, data: roomImage.data } },
+          { type: 'text', text: m.content },
         ],
       };
     }
@@ -74,7 +61,6 @@ Your rules:
     });
 
     const data = await response.json();
-
     if (!response.ok) {
       console.error('Anthropic error:', JSON.stringify(data));
       return res.status(200).json({ reply: "Houston, we have a problem! Can you try asking me again?" });
