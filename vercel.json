@@ -1,0 +1,17 @@
+{
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Permissions-Policy",
+          "value": "microphone=*, camera=*"
+        },
+        {
+          "key": "Feature-Policy",
+          "value": "microphone *; camera *"
+        }
+      ]
+    }
+  ]
+}
