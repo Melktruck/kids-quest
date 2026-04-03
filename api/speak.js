@@ -9,6 +9,7 @@ export default async function handler(req, res) {
   const ARIA_VOICE_ID = '9BWtsMINqrJLrRacOk9x';
 
   if (!apiKey) {
+    console.error('ELEVENLABS_KEY is missing');
     return res.status(500).json({ error: 'Missing ElevenLabs key' });
   }
 
@@ -23,21 +24,19 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           text,
-          model_id: 'eleven_turbo_v2',
+          model_id: 'eleven_monolingual_v1',
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75,
-            style: 0.3,
-            use_speaker_boost: true,
           },
         }),
       }
     );
 
     if (!response.ok) {
-      const err = await response.json();
-      console.error('ElevenLabs error:', JSON.stringify(err));
-      return res.status(500).json({ error: 'TTS failed' });
+      const errText = await response.text();
+      console.error('ElevenLabs full error:', errText);
+      return res.status(500).json({ error: errText });
     }
 
     const audioBuffer = await response.arrayBuffer();
@@ -45,7 +44,7 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     res.send(Buffer.from(audioBuffer));
   } catch (error) {
-    console.error('Speak error:', error.message);
+    console.error('Speak exception:', error.message);
     res.status(500).json({ error: error.message });
   }
 }
