@@ -5,13 +5,19 @@ export default async function handler(req, res) {
   }
 
   const { messages } = req.body;
+  const apiKey = process.env.CLAUDE_API_KEY;
+
+  if (!apiKey) {
+    console.error('Missing CLAUDE_API_KEY environment variable');
+    return res.status(200).json({ reply: "Cosmo's radio is offline — missing API key!" });
+  }
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': process.env.REACT_APP_ANTHROPIC_API_KEY,
+        'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
@@ -38,9 +44,16 @@ Your rules:
     });
 
     const data = await response.json();
+
+    if (!response.ok) {
+      console.error('Anthropic error:', JSON.stringify(data));
+      return res.status(200).json({ reply: `API error: ${data.error?.message || 'unknown'}` });
+    }
+
     const reply = data.content?.[0]?.text || "Houston, we have a problem! Can you try asking me again?";
     res.status(200).json({ reply });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to reach Cosmo' });
+    console.error('Server error:', error.message);
+    res.status(200).json({ reply: `Server error: ${error.message}` });
   }
 }
