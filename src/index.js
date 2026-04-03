@@ -2,8 +2,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
 
 const WELCOME_MESSAGE = (hasPhoto) => hasPhoto
-  ? "Blast off! Hello there, space cadet! I just scanned your play area and I can see SO many things for us to explore! Say give me a mission and let's go on an adventure!"
-  : "Blast off! Hello there, space cadet! I'm Cosmo, your friendly space explorer! I've zoomed past Saturn's rings and danced with shooting stars! What would you like to explore today?";
+  ? "Blast off! Hello there, space cadet! I just scanned your play area and I can see SO many things for us to explore! Push the button and ask me for a mission!"
+  : "Blast off! Hello there, space cadet! I'm Cosmo, your friendly space explorer! I've zoomed past Saturn's rings and danced with shooting stars! Push the button and ask me anything about space!";
 
 const suggestedQuestions = [
   "🌙 What's the moon made of?",
@@ -51,7 +51,6 @@ function SetupScreen({ onComplete }) {
     await startCamera();
   };
 
-  // Unlock audio on this screen too — so it's ready before chat starts
   const handleStart = (img) => {
     const audio = new Audio();
     audio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
@@ -66,7 +65,7 @@ function SetupScreen({ onComplete }) {
         <h1 style={setup.title}>Hi, Grown-Up!</h1>
         <p style={setup.subtitle}>
           Optionally take a photo of your child's play area — Cosmo will invent missions using their real toys!
-          Then hand the phone to your child and let the adventure begin. <strong>No more touching required!</strong>
+          Then hand the phone to your child. They just push the big button to talk to Cosmo!
         </p>
         <p style={setup.privacy}>🔒 The photo never leaves your device — it's only used once to inspire missions.</p>
         {!capturing && !preview && (
@@ -109,7 +108,7 @@ function ChatScreen({ roomImage }) {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [status, setStatus] = useState('');
+  const [readyToTalk, setReadyToTalk] = useState(false);
 
   const bottomRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -124,7 +123,7 @@ function ChatScreen({ roomImage }) {
   // Speak via ElevenLabs
   const speak = useCallback(async (text, onDone) => {
     setIsSpeaking(true);
-    setStatus('🔊 Cosmo is speaking...');
+    setReadyToTalk(false);
     try {
       const response = await fetch('/api/speak', {
         method: 'POST',
@@ -132,38 +131,36 @@ function ChatScreen({ roomImage }) {
         body: JSON.stringify({ text }),
       });
       if (!response.ok) throw new Error('TTS failed');
-
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const audio = audioRef.current;
       if (audio.src && audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
       audio.src = url;
-
       audio.onended = () => {
         setIsSpeaking(false);
         URL.revokeObjectURL(url);
-        setStatus('');
         if (onDone) onDone();
       };
       audio.onerror = () => {
         setIsSpeaking(false);
-        setStatus('');
         if (onDone) onDone();
       };
       await audio.play();
     } catch (e) {
       console.error('Speak error:', e);
       setIsSpeaking(false);
-      setStatus('');
       if (onDone) onDone();
     }
   }, []);
 
-  // Start mic listening
+  // Start mic — only ever called from a direct button tap
   const startListening = useCallback(() => {
     if (isPausedRef.current) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
+    if (!SR) { alert("Voice chat isn't supported on this browser. Try Safari!"); return; }
+
+    setReadyToTalk(false);
+    setIsListening(true);
 
     const recognition = new SR();
     recognition.lang = 'en-US';
@@ -171,38 +168,27 @@ function ChatScreen({ roomImage }) {
     recognition.maxAlternatives = 1;
     recognitionRef.current = recognition;
 
-    recognition.onstart = () => { setIsListening(true); setStatus('👂 Listening...'); };
-    recognition.onend = () => { setIsListening(false); setStatus(''); };
-    recognition.onerror = (e) => {
-      setIsListening(false);
-      setStatus('');
-      // Auto-retry on no-speech errors so conversation keeps flowing
-      if (e.error === 'no-speech' && !isPausedRef.current) {
-        setTimeout(() => startListening(), 500);
-      }
-    };
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
     recognition.onresult = (e) => {
       const transcript = e.results[0][0].transcript;
       sendMessage(transcript);
     };
-
     recognition.start();
   }, []); // eslint-disable-line
 
   const stopListening = () => {
     recognitionRef.current?.stop();
     setIsListening(false);
-    setStatus('');
   };
 
-  // Speak welcome message and start listening automatically on mount
+  // Speak welcome on mount
   useEffect(() => {
     if (sessionStarted.current) return;
     sessionStarted.current = true;
-    // Small delay to ensure audio is unlocked from setup screen tap
     setTimeout(() => {
       speak(welcomeText, () => {
-        if (!isPausedRef.current) startListening();
+        if (!isPausedRef.current) setReadyToTalk(true);
       });
     }, 600);
   }, []); // eslint-disable-line
@@ -212,7 +198,7 @@ function ChatScreen({ roomImage }) {
     if (!userText || loading) return;
     setInput('');
     setLoading(true);
-    setStatus('🌌 Cosmo is thinking...');
+    setReadyToTalk(false);
     stopListening();
 
     const newMessages = [...messages, { role: 'user', content: userText }];
@@ -234,17 +220,15 @@ function ChatScreen({ roomImage }) {
       const reply = data.reply || "Houston, we have a problem! Can you try asking me again?";
       setMessages([...newMessages, { role: 'assistant', content: reply }]);
       setLoading(false);
-
-      // Speak reply then automatically reopen mic
       speak(reply, () => {
-        if (!isPausedRef.current) setTimeout(() => startListening(), 400);
+        if (!isPausedRef.current) setReadyToTalk(true);
       });
     } catch {
-      const err = "Uh oh, my radio signal got lost in space! Can you try again? 📡";
+      const err = "Uh oh, my radio signal got lost in space! Can you try again?";
       setMessages([...newMessages, { role: 'assistant', content: err }]);
       setLoading(false);
       speak(err, () => {
-        if (!isPausedRef.current) setTimeout(() => startListening(), 400);
+        if (!isPausedRef.current) setReadyToTalk(true);
       });
     }
   };
@@ -260,15 +244,24 @@ function ChatScreen({ roomImage }) {
       stopListening();
       audioRef.current.pause();
       setIsSpeaking(false);
-      setStatus('⏸️ Paused');
+      setReadyToTalk(false);
     } else {
-      setStatus('');
-      setTimeout(() => startListening(), 300);
+      setReadyToTalk(true);
     }
   };
 
+  const bigButtonProps = {
+    paused:    { emoji: '⏸️', label: 'Paused',              bg: '#666666', pulse: false, disabled: true  },
+    thinking:  { emoji: '🌌', label: 'Cosmo is thinking...', bg: '#764ba2', pulse: true,  disabled: true  },
+    speaking:  { emoji: '🔊', label: 'Cosmo is speaking...', bg: '#667eea', pulse: true,  disabled: true  },
+    listening: { emoji: '👂', label: 'Listening...',         bg: '#ff4444', pulse: true,  disabled: false },
+    ready:     { emoji: '🎤', label: 'Push to Continue!',    bg: '#43e97b', pulse: true,  disabled: false },
+    idle:      { emoji: '🎤', label: 'Push to Continue!',    bg: '#43e97b', pulse: false, disabled: false },
+  }[isPaused ? 'paused' : loading ? 'thinking' : isSpeaking ? 'speaking' : isListening ? 'listening' : readyToTalk ? 'ready' : 'idle'];
+
   return (
     <div style={styles.page}>
+      {/* Header */}
       <div style={styles.header}>
         <div style={styles.headerLeft}>
           <span style={styles.avatar}>🚀</span>
@@ -288,22 +281,7 @@ function ChatScreen({ roomImage }) {
         </div>
       </div>
 
-      {/* Status bar */}
-      {status ? <div style={styles.statusBar}>{status}</div> : null}
-
-      {/* Listening indicator — big and friendly for kids */}
-      {isListening && (
-        <div style={styles.listeningBanner}>
-          <span style={styles.listeningDot} />
-          <span style={styles.listeningDot} />
-          <span style={styles.listeningDot} />
-          <span style={styles.listeningText}>Cosmo is listening...</span>
-          <span style={styles.listeningDot} />
-          <span style={styles.listeningDot} />
-          <span style={styles.listeningDot} />
-        </div>
-      )}
-
+      {/* Chat messages */}
       <div style={styles.chatArea}>
         {messages.map((msg, i) => (
           <div key={i} style={msg.role === 'user' ? styles.userRow : styles.assistantRow}>
@@ -322,28 +300,41 @@ function ChatScreen({ roomImage }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Suggested questions — still available for typing fallback */}
-      <div style={styles.suggestions}>
-        {suggestedQuestions.map((q, i) => (
-          <button key={i} style={styles.suggestionBtn} onClick={() => sendMessage(q)}>{q}</button>
-        ))}
+      {/* Big talk button */}
+      <div style={styles.talkArea}>
+        <button
+          style={{
+            ...styles.bigMicBtn,
+            background: `radial-gradient(circle, ${bigButtonProps.bg}cc, ${bigButtonProps.bg})`,
+            animation: bigButtonProps.pulse ? 'cosmo-pulse 1.5s infinite' : 'none',
+            opacity: bigButtonProps.disabled && !isListening ? 0.85 : 1,
+            cursor: bigButtonProps.disabled && !isListening ? 'default' : 'pointer',
+          }}
+          onClick={isListening ? stopListening : startListening}
+          disabled={bigButtonProps.disabled && !isListening}
+        >
+          <span style={styles.bigMicEmoji}>{bigButtonProps.emoji}</span>
+        </button>
+        <div style={{ ...styles.bigMicLabel, color: bigButtonProps.bg === '#43e97b' ? '#43e97b' : '#a0c4ff' }}>
+          {bigButtonProps.label}
+        </div>
+
+        {/* Suggested questions */}
+        <div style={styles.suggestions}>
+          {suggestedQuestions.map((q, i) => (
+            <button key={i} style={styles.suggestionBtn} onClick={() => sendMessage(q)}>{q}</button>
+          ))}
+        </div>
       </div>
 
-      {/* Input — kept as fallback but not the primary mode */}
+      {/* Type fallback */}
       <div style={styles.inputArea}>
-        <button
-          style={{ ...styles.micBtn, background: isListening ? 'linear-gradient(135deg,#ff4444,#cc0000)' : 'linear-gradient(135deg,#43e97b,#38f9d7)', transform: isListening ? 'scale(1.15)' : 'scale(1)' }}
-          onClick={isListening ? stopListening : startListening}
-          disabled={loading || isSpeaking}
-        >
-          {isListening ? '⏹️' : '🎤'}
-        </button>
         <input
           style={styles.input}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKey}
-          placeholder="Or type to Cosmo! 🌟"
+          placeholder="Or type to Cosmo... 🌟"
           disabled={loading}
         />
         <button
@@ -353,23 +344,31 @@ function ChatScreen({ roomImage }) {
         >🚀</button>
       </div>
 
+      {/* Pulse animation */}
+      <style>{`
+        @keyframes cosmo-pulse {
+          0%   { box-shadow: 0 0 0 0px ${bigButtonProps.bg}99, 0 8px 32px ${bigButtonProps.bg}44; }
+          70%  { box-shadow: 0 0 0 24px ${bigButtonProps.bg}00, 0 8px 32px ${bigButtonProps.bg}44; }
+          100% { box-shadow: 0 0 0 0px ${bigButtonProps.bg}00, 0 8px 32px ${bigButtonProps.bg}44; }
+        }
+      `}</style>
+
+      {/* Grown-up modal */}
       {showGrownUp && (
         <div style={styles.modalOverlay} onClick={() => setShowGrownUp(false)}>
           <div style={styles.modal} onClick={e => e.stopPropagation()}>
             <div style={styles.modalTitle}>👨‍👩‍👧 For Grown-Ups</div>
-            <div style={styles.modalText}>
-              Your child is having a fully hands-free conversation with <strong>Cosmo</strong>, an AI space explorer powered by Claude AI. Voice by ElevenLabs.
-            </div>
+            <div style={styles.modalText}>Your child is chatting with <strong>Cosmo</strong>, an AI space explorer powered by Claude AI from Anthropic. Voice by ElevenLabs.</div>
             <div style={styles.modalText}>
               ✅ No personal information is collected<br />
               ✅ All responses are child-safe<br />
               ✅ No accounts or sign-ups required<br />
-              ✅ Room photo is never stored or uploaded<br />
-              ✅ Fully hands-free after setup
+              ✅ Room photo is never stored or uploaded
             </div>
             <div style={styles.modalText}>
-              <strong>Tip:</strong> Use the <em>⏸️ Pause</em> button to stop the conversation at any time.
+              <strong>How it works:</strong> Cosmo speaks, then the big green button pulses. Your child pushes it to reply. Simple enough for any age!
             </div>
+            <div style={styles.modalText}>Use <em>⏸️ Pause</em> to stop the conversation at any time.</div>
             <button style={styles.modalClose} onClick={() => setShowGrownUp(false)}>Got it! Close</button>
           </div>
         </div>
@@ -415,24 +414,23 @@ const styles = {
   characterTitle: { fontSize: '0.75rem', color: '#a0c4ff' },
   pauseBtn: { border: 'none', borderRadius: '16px', padding: '6px 14px', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.3s' },
   grownUpBtn: { background: '#ff6b6b', color: 'white', border: 'none', borderRadius: '50%', width: '36px', height: '36px', fontSize: '1rem', cursor: 'pointer', flexShrink: 0 },
-  statusBar: { background: 'rgba(255,215,0,0.12)', borderBottom: '1px solid rgba(255,215,0,0.2)', color: '#ffd700', textAlign: 'center', padding: '6px', fontSize: '0.85rem', flexShrink: 0 },
-  listeningBanner: { background: 'rgba(67,233,123,0.15)', borderBottom: '1px solid rgba(67,233,123,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', flexShrink: 0 },
-  listeningDot: { width: '8px', height: '8px', borderRadius: '50%', background: '#43e97b', display: 'inline-block', animation: 'pulse 1s infinite' },
-  listeningText: { color: '#43e97b', fontSize: '0.9rem', fontWeight: 'bold' },
-  chatArea: { flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  chatArea: { flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' },
   assistantRow: { display: 'flex', alignItems: 'flex-end', gap: '8px', maxWidth: '85%' },
   userRow: { display: 'flex', justifyContent: 'flex-end', maxWidth: '85%', alignSelf: 'flex-end' },
   msgAvatar: { fontSize: '1.4rem', flexShrink: 0 },
-  assistantBubble: { background: 'rgba(255,255,255,0.12)', borderRadius: '18px 18px 18px 4px', padding: '12px 16px', fontSize: '1rem', lineHeight: '1.5', border: '1px solid rgba(255,255,255,0.15)' },
-  userBubble: { background: 'linear-gradient(135deg,#667eea,#764ba2)', borderRadius: '18px 18px 4px 18px', padding: '12px 16px', fontSize: '1rem', lineHeight: '1.5' },
+  assistantBubble: { background: 'rgba(255,255,255,0.12)', borderRadius: '18px 18px 18px 4px', padding: '10px 14px', fontSize: '0.95rem', lineHeight: '1.5', border: '1px solid rgba(255,255,255,0.15)' },
+  userBubble: { background: 'linear-gradient(135deg,#667eea,#764ba2)', borderRadius: '18px 18px 4px 18px', padding: '10px 14px', fontSize: '0.95rem', lineHeight: '1.5' },
   typing: { color: '#a0c4ff', fontStyle: 'italic' },
   dots: { color: '#ffd700' },
-  suggestions: { display: 'flex', gap: '8px', padding: '8px 14px', overflowX: 'auto', flexShrink: 0, flexWrap: 'wrap' },
-  suggestionBtn: { background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '16px', padding: '6px 12px', fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 },
-  inputArea: { display: 'flex', gap: '8px', padding: '10px 14px', background: 'rgba(255,255,255,0.05)', borderTop: '1px solid rgba(255,255,255,0.1)', flexShrink: 0, alignItems: 'center' },
-  micBtn: { width: '48px', height: '48px', borderRadius: '50%', border: 'none', fontSize: '1.3rem', cursor: 'pointer', flexShrink: 0, transition: 'transform 0.2s,background 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  input: { flex: 1, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '24px', padding: '12px 16px', color: 'white', fontSize: '1rem', outline: 'none' },
-  sendBtn: { background: 'linear-gradient(135deg,#667eea,#764ba2)', color: 'white', border: 'none', borderRadius: '50%', width: '48px', height: '48px', fontSize: '1.3rem', cursor: 'pointer', flexShrink: 0 },
+  talkArea: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 16px 4px', flexShrink: 0, gap: '10px' },
+  bigMicBtn: { width: '130px', height: '130px', borderRadius: '50%', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'transform 0.15s', flexShrink: 0 },
+  bigMicEmoji: { fontSize: '3.2rem', lineHeight: 1 },
+  bigMicLabel: { fontSize: '1.05rem', fontWeight: 'bold', letterSpacing: '0.02em' },
+  suggestions: { display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' },
+  suggestionBtn: { background: 'rgba(255,255,255,0.08)', color: 'white', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '16px', padding: '5px 10px', fontSize: '0.75rem', cursor: 'pointer', whiteSpace: 'nowrap' },
+  inputArea: { display: 'flex', gap: '8px', padding: '8px 14px', background: 'rgba(255,255,255,0.05)', borderTop: '1px solid rgba(255,255,255,0.1)', flexShrink: 0, alignItems: 'center' },
+  input: { flex: 1, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '24px', padding: '10px 16px', color: 'white', fontSize: '0.95rem', outline: 'none' },
+  sendBtn: { background: 'linear-gradient(135deg,#667eea,#764ba2)', color: 'white', border: 'none', borderRadius: '50%', width: '44px', height: '44px', fontSize: '1.2rem', cursor: 'pointer', flexShrink: 0 },
   modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 100 },
   modal: { background: '#1a1a4e', borderRadius: '20px', padding: '24px', maxWidth: '400px', width: '100%', border: '1px solid rgba(255,255,255,0.2)' },
   modalTitle: { fontSize: '1.3rem', fontWeight: 'bold', marginBottom: '16px', color: '#ffd700' },
