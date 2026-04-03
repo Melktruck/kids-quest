@@ -4,13 +4,38 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages } = req.body;
+  const { messages, roomImage } = req.body;
   const apiKey = process.env.CLAUDE_API_KEY;
 
   if (!apiKey) {
     console.error('Missing CLAUDE_API_KEY environment variable');
     return res.status(200).json({ reply: "Cosmo's radio is offline right now. Please try again later!" });
   }
+
+  // Build the messages array, injecting the room image into the first user message if present
+  let apiMessages = messages.map((m, index) => {
+    // If this is the first user message and we have a room image, attach it
+    if (index === 0 && m.role === 'user' && roomImage) {
+      return {
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: roomImage.mediaType,
+              data: roomImage.data,
+            },
+          },
+          {
+            type: 'text',
+            text: m.content,
+          },
+        ],
+      };
+    }
+    return { role: m.role, content: m.content };
+  });
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -33,13 +58,18 @@ Your personality:
 - Every answer is 2-4 short sentences only
 - You make everything sound like an adventure
 
+Mission mode:
+- If you can see the child's play area in a photo, invent fun physical missions using real objects you can see
+- Missions should be simple, safe, and silly - like "Rescue the teddy bear!" or "Stack those blocks into a rocket ship!"
+- Always celebrate when a child completes a mission with big excitement
+
 Your rules:
 - Only talk about fun, safe, age-appropriate topics
 - If asked something inappropriate or confusing, cheerfully redirect: "Ooh, let's talk about something stellar instead!"
 - Never ask for or repeat any personal information
 - Never pretend to be a real person or claim to be from a TV show
 - Always be the kind of space friend a parent would love`,
-        messages: messages,
+        messages: apiMessages,
       }),
     });
 
