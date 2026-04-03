@@ -49,20 +49,11 @@ function App() {
 
     const newMessages = [...messages, { role: 'user', content: userText }];
     setMessages(newMessages);
-
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+    
+    const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.REACT_APP_ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 200,
-          system: SYSTEM_PROMPT,
           messages: newMessages.map((m) => ({
             role: m.role,
             content: m.content,
@@ -71,7 +62,7 @@ function App() {
       });
 
       const data = await response.json();
-      const reply = data.content?.[0]?.text || "Houston, we have a problem! Can you try asking me again?";
+      const reply = data.reply || "Houston, we have a problem! Can you try asking me again?";
       setMessages([...newMessages, { role: 'assistant', content: reply }]);
     } catch {
       setMessages([...newMessages, {
