@@ -1,6 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
 
+const WELCOME_MESSAGE = (hasPhoto) => hasPhoto
+  ? "Blast off! Hello there, space cadet! I just scanned your play area and I can see SO many things for us to explore! Say give me a mission and let's go on an adventure!"
+  : "Blast off! Hello there, space cadet! I'm Cosmo, your friendly space explorer! I've zoomed past Saturn's rings and danced with shooting stars! What would you like to explore today?";
+
 const suggestedQuestions = [
   "🌙 What's the moon made of?",
   "🚀 How fast does a rocket go?",
@@ -8,6 +12,7 @@ const suggestedQuestions = [
   "🎯 Give me a mission!",
 ];
 
+// ─── Setup Screen ─────────────────────────────────────────────────────────────
 function SetupScreen({ onComplete }) {
   const [capturing, setCapturing] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -46,14 +51,22 @@ function SetupScreen({ onComplete }) {
     await startCamera();
   };
 
+  // Unlock audio on this screen too — so it's ready before chat starts
+  const handleStart = (img) => {
+    const audio = new Audio();
+    audio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+    audio.play().catch(() => {});
+    onComplete(img);
+  };
+
   return (
     <div style={setup.page}>
       <div style={setup.card}>
         <div style={setup.rocket}>🚀</div>
         <h1 style={setup.title}>Hi, Grown-Up!</h1>
         <p style={setup.subtitle}>
-          Before handing the phone to your child, take a quick photo of their play area.
-          Cosmo will use it to invent fun missions using their real toys!
+          Optionally take a photo of your child's play area — Cosmo will invent missions using their real toys!
+          Then hand the phone to your child and let the adventure begin. <strong>No more touching required!</strong>
         </p>
         <p style={setup.privacy}>🔒 The photo never leaves your device — it's only used once to inspire missions.</p>
         {!capturing && !preview && (
@@ -70,57 +83,45 @@ function SetupScreen({ onComplete }) {
             <img src={preview} alt="Play area" style={setup.preview} />
             <div style={setup.previewBtns}>
               <button style={setup.retakeBtn} onClick={retake}>🔄 Retake</button>
-              <button style={setup.goBtn} onClick={() => onComplete(roomImage)}>🚀 Start Adventure!</button>
+              <button style={setup.goBtn} onClick={() => handleStart(roomImage)}>🚀 Start Adventure!</button>
             </div>
           </div>
         )}
-        <button style={setup.skipBtn} onClick={() => onComplete(null)}>Skip photo — just chat</button>
+        <button style={setup.skipBtn} onClick={() => handleStart(null)}>
+          Skip photo — start chatting!
+        </button>
       </div>
     </div>
   );
 }
 
+// ─── Chat Screen ──────────────────────────────────────────────────────────────
 function ChatScreen({ roomImage }) {
+  const welcomeText = WELCOME_MESSAGE(!!roomImage);
+
   const [messages, setMessages] = useState([{
     role: 'assistant',
-    content: roomImage
-      ? "Blast off! 🚀 Hello there, space cadet! I just scanned your play area — I can see SO many things for us to explore! Ask me for a mission and let's go on an adventure!"
-      : "Blast off! 🚀 Hello there, space cadet! I'm Cosmo, your friendly space explorer! I've zoomed past Saturn's rings and danced with shooting stars! What would you like to explore today?",
+    content: welcomeText,
   }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [showGrownUp, setShowGrownUp] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [handsFree, setHandsFree] = useState(false);
-  const [audioReady, setAudioReady] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [status, setStatus] = useState('');
 
   const bottomRef = useRef(null);
   const recognitionRef = useRef(null);
   const isFirstMessage = useRef(true);
-  const handsFreeRef = useRef(false);
-  // We keep a single Audio element and unlock it on first tap
+  const isPausedRef = useRef(false);
   const audioRef = useRef(new Audio());
+  const sessionStarted = useRef(false);
 
-  useEffect(() => { handsFreeRef.current = handsFree; }, [handsFree]);
+  useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // iOS unlock — play a silent sound on first user tap to ungate the audio element
-  const unlockAudio = useCallback(() => {
-    if (audioReady) return;
-    const audio = audioRef.current;
-    audio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-    audio.play().then(() => {
-      audio.pause();
-      setAudioReady(true);
-      setStatus('');
-    }).catch(() => {
-      // Will retry on next tap
-    });
-  }, [audioReady]);
-
-  // Speak via ElevenLabs — reuses the unlocked audio element
+  // Speak via ElevenLabs
   const speak = useCallback(async (text, onDone) => {
     setIsSpeaking(true);
     setStatus('🔊 Cosmo is speaking...');
@@ -135,15 +136,13 @@ function ChatScreen({ roomImage }) {
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const audio = audioRef.current;
-
-      // Revoke previous URL if any
       if (audio.src && audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
-
       audio.src = url;
+
       audio.onended = () => {
         setIsSpeaking(false);
-        setStatus('');
         URL.revokeObjectURL(url);
+        setStatus('');
         if (onDone) onDone();
       };
       audio.onerror = () => {
@@ -160,18 +159,33 @@ function ChatScreen({ roomImage }) {
     }
   }, []);
 
+  // Start mic listening
   const startListening = useCallback(() => {
+    if (isPausedRef.current) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert("Voice chat isn't supported on this browser. Try Chrome or Safari!"); return; }
+    if (!SR) return;
+
     const recognition = new SR();
     recognition.lang = 'en-US';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
     recognitionRef.current = recognition;
+
     recognition.onstart = () => { setIsListening(true); setStatus('👂 Listening...'); };
     recognition.onend = () => { setIsListening(false); setStatus(''); };
-    recognition.onerror = () => { setIsListening(false); setStatus(''); };
-    recognition.onresult = (e) => sendMessage(e.results[0][0].transcript);
+    recognition.onerror = (e) => {
+      setIsListening(false);
+      setStatus('');
+      // Auto-retry on no-speech errors so conversation keeps flowing
+      if (e.error === 'no-speech' && !isPausedRef.current) {
+        setTimeout(() => startListening(), 500);
+      }
+    };
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      sendMessage(transcript);
+    };
+
     recognition.start();
   }, []); // eslint-disable-line
 
@@ -181,12 +195,25 @@ function ChatScreen({ roomImage }) {
     setStatus('');
   };
 
+  // Speak welcome message and start listening automatically on mount
+  useEffect(() => {
+    if (sessionStarted.current) return;
+    sessionStarted.current = true;
+    // Small delay to ensure audio is unlocked from setup screen tap
+    setTimeout(() => {
+      speak(welcomeText, () => {
+        if (!isPausedRef.current) startListening();
+      });
+    }, 600);
+  }, []); // eslint-disable-line
+
   const sendMessage = async (text) => {
     const userText = text || input.trim();
     if (!userText || loading) return;
     setInput('');
     setLoading(true);
     setStatus('🌌 Cosmo is thinking...');
+    stopListening();
 
     const newMessages = [...messages, { role: 'user', content: userText }];
     setMessages(newMessages);
@@ -207,14 +234,18 @@ function ChatScreen({ roomImage }) {
       const reply = data.reply || "Houston, we have a problem! Can you try asking me again?";
       setMessages([...newMessages, { role: 'assistant', content: reply }]);
       setLoading(false);
+
+      // Speak reply then automatically reopen mic
       speak(reply, () => {
-        if (handsFreeRef.current) setTimeout(() => startListening(), 500);
+        if (!isPausedRef.current) setTimeout(() => startListening(), 400);
       });
     } catch {
       const err = "Uh oh, my radio signal got lost in space! Can you try again? 📡";
       setMessages([...newMessages, { role: 'assistant', content: err }]);
       setLoading(false);
-      speak(err);
+      speak(err, () => {
+        if (!isPausedRef.current) setTimeout(() => startListening(), 400);
+      });
     }
   };
 
@@ -222,15 +253,22 @@ function ChatScreen({ roomImage }) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  const toggleHandsFree = () => {
-    const next = !handsFree;
-    setHandsFree(next);
-    if (next && !isListening && !isSpeaking && !loading) setTimeout(() => startListening(), 300);
-    else if (!next) stopListening();
+  const togglePause = () => {
+    const next = !isPaused;
+    setIsPaused(next);
+    if (next) {
+      stopListening();
+      audioRef.current.pause();
+      setIsSpeaking(false);
+      setStatus('⏸️ Paused');
+    } else {
+      setStatus('');
+      setTimeout(() => startListening(), 300);
+    }
   };
 
   return (
-    <div style={styles.page} onClick={unlockAudio}>
+    <div style={styles.page}>
       <div style={styles.header}>
         <div style={styles.headerLeft}>
           <span style={styles.avatar}>🚀</span>
@@ -241,20 +279,30 @@ function ChatScreen({ roomImage }) {
         </div>
         <div style={styles.headerRight}>
           <button
-            style={{ ...styles.handsFreeBtn, background: handsFree ? '#43e97b' : 'rgba(255,255,255,0.15)', color: handsFree ? '#0a0a2e' : 'white' }}
-            onClick={toggleHandsFree}
+            style={{ ...styles.pauseBtn, background: isPaused ? '#ffd700' : 'rgba(255,255,255,0.15)', color: isPaused ? '#0a0a2e' : 'white' }}
+            onClick={togglePause}
           >
-            {handsFree ? '🎙️ ON' : '🎙️ Hands-Free'}
+            {isPaused ? '▶️ Resume' : '⏸️ Pause'}
           </button>
-          <button style={styles.grownUpBtn} onClick={(e) => { e.stopPropagation(); setShowGrownUp(true); }}>👨‍👩‍👧</button>
+          <button style={styles.grownUpBtn} onClick={() => setShowGrownUp(true)}>👨‍👩‍👧</button>
         </div>
       </div>
 
-      {/* Status bar — shows unlock prompt until audio is ready */}
-      {!audioReady
-        ? <div style={styles.statusBarPrompt}>👆 Tap anywhere to enable Cosmo's voice!</div>
-        : status ? <div style={styles.statusBar}>{status}</div> : null
-      }
+      {/* Status bar */}
+      {status ? <div style={styles.statusBar}>{status}</div> : null}
+
+      {/* Listening indicator — big and friendly for kids */}
+      {isListening && (
+        <div style={styles.listeningBanner}>
+          <span style={styles.listeningDot} />
+          <span style={styles.listeningDot} />
+          <span style={styles.listeningDot} />
+          <span style={styles.listeningText}>Cosmo is listening...</span>
+          <span style={styles.listeningDot} />
+          <span style={styles.listeningDot} />
+          <span style={styles.listeningDot} />
+        </div>
+      )}
 
       <div style={styles.chatArea}>
         {messages.map((msg, i) => (
@@ -274,12 +322,14 @@ function ChatScreen({ roomImage }) {
         <div ref={bottomRef} />
       </div>
 
+      {/* Suggested questions — still available for typing fallback */}
       <div style={styles.suggestions}>
         {suggestedQuestions.map((q, i) => (
           <button key={i} style={styles.suggestionBtn} onClick={() => sendMessage(q)}>{q}</button>
         ))}
       </div>
 
+      {/* Input — kept as fallback but not the primary mode */}
       <div style={styles.inputArea}>
         <button
           style={{ ...styles.micBtn, background: isListening ? 'linear-gradient(135deg,#ff4444,#cc0000)' : 'linear-gradient(135deg,#43e97b,#38f9d7)', transform: isListening ? 'scale(1.15)' : 'scale(1)' }}
@@ -293,7 +343,7 @@ function ChatScreen({ roomImage }) {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKey}
-          placeholder="Speak or type to Cosmo! 🌟"
+          placeholder="Or type to Cosmo! 🌟"
           disabled={loading}
         />
         <button
@@ -307,14 +357,19 @@ function ChatScreen({ roomImage }) {
         <div style={styles.modalOverlay} onClick={() => setShowGrownUp(false)}>
           <div style={styles.modal} onClick={e => e.stopPropagation()}>
             <div style={styles.modalTitle}>👨‍👩‍👧 For Grown-Ups</div>
-            <div style={styles.modalText}>Your child is chatting with <strong>Cosmo</strong>, an AI space explorer powered by Claude AI from Anthropic. Voice by ElevenLabs.</div>
+            <div style={styles.modalText}>
+              Your child is having a fully hands-free conversation with <strong>Cosmo</strong>, an AI space explorer powered by Claude AI. Voice by ElevenLabs.
+            </div>
             <div style={styles.modalText}>
               ✅ No personal information is collected<br />
               ✅ All responses are child-safe<br />
               ✅ No accounts or sign-ups required<br />
-              ✅ Room photo is never stored or uploaded
+              ✅ Room photo is never stored or uploaded<br />
+              ✅ Fully hands-free after setup
             </div>
-            <div style={styles.modalText}><strong>Tip:</strong> Tap <em>"🎙️ Hands-Free"</em> so your child can talk naturally without pressing the mic each time!</div>
+            <div style={styles.modalText}>
+              <strong>Tip:</strong> Use the <em>⏸️ Pause</em> button to stop the conversation at any time.
+            </div>
             <button style={styles.modalClose} onClick={() => setShowGrownUp(false)}>Got it! Close</button>
           </div>
         </div>
@@ -323,12 +378,14 @@ function ChatScreen({ roomImage }) {
   );
 }
 
+// ─── App Root ─────────────────────────────────────────────────────────────────
 function App() {
   const [roomImage, setRoomImage] = useState(undefined);
   if (roomImage === undefined) return <SetupScreen onComplete={img => setRoomImage(img)} />;
   return <ChatScreen roomImage={roomImage} />;
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const setup = {
   page: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(180deg,#0a0a2e 0%,#1a1a4e 50%,#0d0d3b 100%)', padding: '20px', fontFamily: '"Segoe UI",Roboto,sans-serif' },
   card: { background: 'rgba(255,255,255,0.08)', borderRadius: '24px', padding: '32px 24px', maxWidth: '420px', width: '100%', border: '1px solid rgba(255,255,255,0.15)', textAlign: 'center', color: 'white' },
@@ -356,10 +413,12 @@ const styles = {
   avatar: { fontSize: '2rem' },
   characterName: { fontSize: '1.1rem', fontWeight: 'bold', color: '#ffd700' },
   characterTitle: { fontSize: '0.75rem', color: '#a0c4ff' },
-  handsFreeBtn: { border: 'none', borderRadius: '16px', padding: '6px 12px', fontSize: '0.78rem', fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.3s' },
+  pauseBtn: { border: 'none', borderRadius: '16px', padding: '6px 14px', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.3s' },
   grownUpBtn: { background: '#ff6b6b', color: 'white', border: 'none', borderRadius: '50%', width: '36px', height: '36px', fontSize: '1rem', cursor: 'pointer', flexShrink: 0 },
-  statusBarPrompt: { background: 'rgba(255,107,107,0.2)', borderBottom: '1px solid rgba(255,107,107,0.3)', color: '#ff9999', textAlign: 'center', padding: '8px', fontSize: '0.9rem', flexShrink: 0, fontWeight: 'bold' },
   statusBar: { background: 'rgba(255,215,0,0.12)', borderBottom: '1px solid rgba(255,215,0,0.2)', color: '#ffd700', textAlign: 'center', padding: '6px', fontSize: '0.85rem', flexShrink: 0 },
+  listeningBanner: { background: 'rgba(67,233,123,0.15)', borderBottom: '1px solid rgba(67,233,123,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', flexShrink: 0 },
+  listeningDot: { width: '8px', height: '8px', borderRadius: '50%', background: '#43e97b', display: 'inline-block', animation: 'pulse 1s infinite' },
+  listeningText: { color: '#43e97b', fontSize: '0.9rem', fontWeight: 'bold' },
   chatArea: { flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
   assistantRow: { display: 'flex', alignItems: 'flex-end', gap: '8px', maxWidth: '85%' },
   userRow: { display: 'flex', justifyContent: 'flex-end', maxWidth: '85%', alignSelf: 'flex-end' },
